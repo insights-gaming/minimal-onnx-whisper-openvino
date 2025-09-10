@@ -132,6 +132,44 @@ std::vector<std::vector<float>> create_mel_filterbank(int n_mels, int n_fft, int
     return filters;
 }
 
+// Simple but effective decimation/interpolation resampling
+std::vector<float> resample_audio(const std::vector<float>& input, int input_rate, int output_rate) {
+    if (input_rate == output_rate) {
+        return input;
+    }
+    
+    // For downsampling, apply anti-aliasing filter first
+    std::vector<float> filtered_input = input;
+    if (input_rate > output_rate) {
+        // Simple low-pass filter to prevent aliasing
+        float cutoff = 0.45f * output_rate / input_rate;
+        for (int i = 1; i < filtered_input.size() - 1; i++) {
+            filtered_input[i] = input[i] * cutoff + input[i-1] * (0.5f * (1.0f - cutoff)) + input[i+1] * (0.5f * (1.0f - cutoff));
+        }
+    }
+    
+    // Linear interpolation resampling
+    double ratio = static_cast<double>(output_rate) / input_rate;
+    int output_length = static_cast<int>(filtered_input.size() * ratio);
+    std::vector<float> output(output_length);
+    
+    for (int i = 0; i < output_length; i++) {
+        double src_idx = i / ratio;
+        int idx = static_cast<int>(src_idx);
+        double frac = src_idx - idx;
+        
+        if (idx + 1 < filtered_input.size()) {
+            output[i] = filtered_input[idx] * (1.0f - frac) + filtered_input[idx + 1] * frac;
+        } else if (idx < filtered_input.size()) {
+            output[i] = filtered_input[idx];
+        } else {
+            output[i] = 0.0f;
+        }
+    }
+    
+    return output;
+}
+
 // Extract mel spectrogram features (improved version)
 std::vector<std::vector<float>> extract_mel_features(const std::vector<float>& audio, int sample_rate) {
     const int n_fft = 400;  // Whisper uses 400 for 16kHz
@@ -141,19 +179,16 @@ std::vector<std::vector<float>> extract_mel_features(const std::vector<float>& a
     // Resample to 16kHz if needed
     std::vector<float> resampled_audio;
     if (sample_rate != 16000) {
-        double ratio = 16000.0 / sample_rate;
-        int new_length = static_cast<int>(audio.size() * ratio);
-        resampled_audio.resize(new_length);
-        for (int i = 0; i < new_length; i++) {
-            double src_idx = i / ratio;
-            int idx = static_cast<int>(src_idx);
-            if (idx + 1 < audio.size()) {
-                double frac = src_idx - idx;
-                resampled_audio[i] = audio[idx] * (1.0f - frac) + audio[idx + 1] * frac;
-            } else if (idx < audio.size()) {
-                resampled_audio[i] = audio[idx];
-            }
+        std::cout << "Resampling from " << sample_rate << "Hz to 16000Hz..." << std::endl;
+        resampled_audio = resample_audio(audio, sample_rate, 16000);
+        
+        // Debug: Check audio levels after resampling
+        float max_val = 0.0f, min_val = 0.0f;
+        for (float sample : resampled_audio) {
+            max_val = std::max(max_val, sample);
+            min_val = std::min(min_val, sample);
         }
+        std::cout << "Resampled audio range: [" << min_val << ", " << max_val << "], length: " << resampled_audio.size() << std::endl;
         sample_rate = 16000;
     } else {
         resampled_audio = audio;
@@ -254,13 +289,19 @@ std::vector<std::vector<float>> pad_or_trim_features(const std::vector<std::vect
     return result;
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     try {
-        std::cout << "Loading audio file..." << std::endl;
+        // Default to testaudio.wav, but allow command line override
+        std::string audio_file = "testaudio.wav";
+        if (argc > 1) {
+            audio_file = argv[1];
+        }
+        
+        std::cout << "Loading audio file: " << audio_file << std::endl;
         
         // Load audio
         int sample_rate;
-        auto audio = load_audio("testaudio.wav", sample_rate);
+        auto audio = load_audio(audio_file, sample_rate);
         std::cout << "Loaded audio: " << audio.size() << " samples at " << sample_rate << " Hz" << std::endl;
         
         // Extract mel features
@@ -268,8 +309,32 @@ int main() {
         auto mel_features = extract_mel_features(audio, sample_rate);
         std::cout << "Extracted " << mel_features.size() << " frames" << std::endl;
         
+        // Debug: Check mel feature statistics
+        if (!mel_features.empty()) {
+            float mel_min = 1e10f, mel_max = -1e10f;
+            for (const auto& frame : mel_features) {
+                for (float val : frame) {
+                    mel_min = std::min(mel_min, val);
+                    mel_max = std::max(mel_max, val);
+                }
+            }
+            std::cout << "Mel features range before normalization: [" << mel_min << ", " << mel_max << "]" << std::endl;
+        }
+        
         // Normalize features
         normalize_features(mel_features);
+        
+        // Debug: Check normalized feature statistics
+        if (!mel_features.empty()) {
+            float norm_min = 1e10f, norm_max = -1e10f;
+            for (const auto& frame : mel_features) {
+                for (float val : frame) {
+                    norm_min = std::min(norm_min, val);
+                    norm_max = std::max(norm_max, val);
+                }
+            }
+            std::cout << "Mel features range after normalization: [" << norm_min << ", " << norm_max << "]" << std::endl;
+        }
         
         // Pad to exactly 3000 frames (30 seconds at 16kHz)
         auto padded_features = pad_or_trim_features(mel_features, 3000);
