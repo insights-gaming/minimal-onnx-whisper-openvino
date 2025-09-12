@@ -347,10 +347,31 @@ int main(int argc, char *argv[]) {
     bool use_openvino = false;
     bool show_help = false;
 
+    std::string openvino_backends[3] = {"NPU", "GPU", "CPU"};
+    size_t openvino_backend_count = 3;
+
     for (int i = 1; i < argc; i++) {
       std::string arg = argv[i];
-      if (arg == "--openvino" || arg == "-ov") {
+      if (arg == "--openvino") {
         use_openvino = true;
+      } else if (arg.find("--openvino=") == 0 && arg.size() > 11) {
+        use_openvino = true;
+        openvino_backend_count = 0;
+        size_t offset = 11;
+        while (offset < arg.size()) {
+          std::string backend;
+          auto pos = arg.find(",", offset);
+          if (pos != std::string::npos) {
+            backend = arg.substr(offset, pos - offset).c_str();
+            offset = pos + 1;
+          } else {
+            backend = arg.substr(offset).c_str();
+            offset = arg.size();
+          }
+
+          openvino_backends[openvino_backend_count++] = backend;
+        }
+
       } else if (arg == "--help" || arg == "-h") {
         show_help = true;
         break;
@@ -439,30 +460,42 @@ int main(int argc, char *argv[]) {
     bool openvino_available = false;
 
     if (use_openvino) {
-      try {
-        std::cout << "Configuring OpenVINO execution provider..." << std::endl;
-        openvino_session_options.SetIntraOpNumThreads(1);
-        openvino_session_options.SetGraphOptimizationLevel(
-            GraphOptimizationLevel::ORT_DISABLE_ALL);
+      std::cout << "Configuring OpenVINO execution provider..." << std::endl;
 
-        OrtOpenVINOProviderOptions openvino_options;
-        openvino_options.device_type = "AUTO:NPU,GPU,CPU";
-        openvino_options.device_id = "";
-        openvino_options.num_of_threads = 0;
-        openvino_options.cache_dir = "";
-        openvino_options.context = nullptr;
-        openvino_options.enable_opencl_throttling = false;
-        openvino_options.enable_dynamic_shapes =
-            true; // Enable for better compatibility
+      openvino_session_options.SetIntraOpNumThreads(1);
+      openvino_session_options.SetGraphOptimizationLevel(
+          GraphOptimizationLevel::ORT_DISABLE_ALL);
 
-        openvino_session_options.AppendExecutionProvider_OpenVINO(
-            openvino_options);
-        openvino_available = true;
+      OrtOpenVINOProviderOptions openvino_options;
+      openvino_options.device_id = "";
+      openvino_options.num_of_threads = 0;
+      openvino_options.cache_dir = "";
+      openvino_options.context = nullptr;
+      openvino_options.enable_opencl_throttling = false;
+      openvino_options.enable_dynamic_shapes =
+          true; // Enable for better compatibility
+
+      for (size_t i = 0; i < openvino_backend_count; i++) {
+        std::cout << "Attempting to configure OpenVINO with "
+                  << openvino_backends[i] << "..." << std::endl;
+        try {
+          openvino_options.device_type = openvino_backends[i].c_str();
+          openvino_session_options.AppendExecutionProvider_OpenVINO(
+              openvino_options);
+          openvino_available = true;
+          break;
+        } catch (const std::exception &e) {
+          std::cout << "Failed to configure OpenVINO with "
+                    << openvino_backends[i] << ": " << e.what() << std::endl;
+          openvino_available = false;
+        }
+      }
+
+      if (openvino_available) {
         std::cout << "OpenVINO execution provider configured" << std::endl;
-      } catch (const std::exception &e) {
-        std::cout << "Failed to configure OpenVINO: " << e.what() << std::endl;
-        std::cout << "Will use CPU execution provider" << std::endl;
-        openvino_available = false;
+      } else {
+        std::cout << "Falling back to native CPU execution provider"
+                  << std::endl;
       }
     }
 
