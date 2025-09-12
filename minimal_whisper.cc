@@ -333,10 +333,11 @@ pad_or_trim_features(const std::vector<std::vector<float>> &features,
 void print_usage() {
   std::cout << "Minimal Whisper - Lightweight speech recognition using ONNX "
                "Runtime\n\n";
-  std::cout << "Usage: minimal_whisper.exe [audio_file.wav] "
-               "[--openvino[=device1,device2,...]] "
-               "[--model-dir=path] [--model-prefix=prefix] "
-               "[--model-suffix=suffix] [--clear-cache] [--help]\n\n";
+  std::cout
+      << "Usage: minimal_whisper.exe [audio_file.wav] "
+         "[--openvino[=device1,device2,...]] "
+         "[--model-dir=path] [--model-prefix=prefix] "
+         "[--model-suffix=suffix] [--clear-cache] [--no-cache] [--help]\n\n";
   std::cout << "Arguments:\n";
   std::cout
       << "  audio_file.wav       Input audio file (default: testaudio.wav)\n";
@@ -350,6 +351,7 @@ void print_usage() {
   std::cout
       << "  --model-suffix=suffix Model filename suffix (default: .int8)\n";
   std::cout << "  --clear-cache        Clear OpenVINO model cache and exit\n";
+  std::cout << "  --no-cache           Disable OpenVINO model caching\n";
   std::cout << "  --help, -h           Show this help message\n\n";
   std::cout << "Examples:\n";
   std::cout << "  minimal_whisper.exe                              # Use CPU "
@@ -361,7 +363,9 @@ void print_usage() {
   std::cout << "  minimal_whisper.exe --model-dir=models\\whisper-large "
                "--model-prefix=large-\n";
   std::cout << "  minimal_whisper.exe --clear-cache                # Clear "
-               "model cache\n\n";
+               "model cache\n";
+  std::cout << "  minimal_whisper.exe --openvino --no-cache        # Use "
+               "OpenVINO without caching\n\n";
   std::cout << "Features:\n";
   std::cout << "  - OpenVINO model pre-compilation and caching for faster "
                "subsequent runs\n";
@@ -395,7 +399,11 @@ private:
   }
 
 public:
-  OpenVINOModelCache() {
+  OpenVINOModelCache(bool no_cache = false) {
+    if (no_cache) {
+      return;
+    }
+
     cache_dir_ = std::filesystem::current_path() / "openvino_cache";
     std::filesystem::create_directories(cache_dir_);
     std::cout << "OpenVINO cache directory: " << cache_dir_.string()
@@ -772,6 +780,7 @@ int main(int argc, char *argv[]) {
     bool use_openvino = false;
     bool show_help = false;
     bool clear_cache = false;
+    bool no_cache = false;
     std::filesystem::path model_path = "models\\whisper-small";
     std::wstring model_prefix = L"small-";
     std::wstring model_suffix = L".int8";
@@ -812,6 +821,8 @@ int main(int argc, char *argv[]) {
         model_suffix = std::wstring(s.begin(), s.end());
       } else if (arg == "--clear-cache") {
         clear_cache = true;
+      } else if (arg == "--no-cache") {
+        no_cache = true;
       } else if (arg == "--help" || arg == "-h") {
         show_help = true;
         break;
@@ -906,7 +917,7 @@ int main(int argc, char *argv[]) {
 
     // Configure execution provider with caching
     std::string selected_device = "CPU";
-    OpenVINOModelCache model_cache;
+    OpenVINOModelCache model_cache(no_cache);
 
     if (use_openvino) {
       std::cout << "Configuring OpenVINO execution provider..." << std::endl;
@@ -917,7 +928,8 @@ int main(int argc, char *argv[]) {
       OrtOpenVINOProviderOptions openvino_options;
       openvino_options.device_id = "";
       openvino_options.num_of_threads = 0;
-      openvino_options.cache_dir = model_cache.get_cache_dir().c_str();
+      openvino_options.cache_dir =
+          no_cache ? nullptr : model_cache.get_cache_dir().c_str();
       openvino_options.context = nullptr;
       openvino_options.enable_opencl_throttling = false;
       openvino_options.enable_dynamic_shapes = true;
@@ -964,12 +976,20 @@ int main(int argc, char *argv[]) {
 
     // OpenVINO will automatically cache compiled models on first use
     if (use_openvino) {
-      std::cout << "\n=== OpenVINO CACHING ENABLED ===" << std::endl;
-      std::cout
-          << "Models will be compiled and cached automatically on first use"
-          << std::endl;
-      std::cout << "Subsequent runs will be faster using cached compiled models"
-                << std::endl;
+      if (no_cache) {
+        std::cout << "\n=== OpenVINO CACHING DISABLED ===" << std::endl;
+        std::cout
+            << "Model caching is disabled - models will be compiled each run"
+            << std::endl;
+      } else {
+        std::cout << "\n=== OpenVINO CACHING ENABLED ===" << std::endl;
+        std::cout
+            << "Models will be compiled and cached automatically on first use"
+            << std::endl;
+        std::cout
+            << "Subsequent runs will be faster using cached compiled models"
+            << std::endl;
+      }
     }
 
     // Phase 1: Encoding
@@ -1015,7 +1035,8 @@ int main(int argc, char *argv[]) {
     std::cout << "\n=== Performance Summary ===" << std::endl;
     if (use_openvino) {
       std::cout << "OpenVINO Device: " << selected_device << std::endl;
-      std::cout << "Model cache used: Yes" << std::endl;
+      std::cout << "Model cache used: " << (no_cache ? "No" : "Yes")
+                << std::endl;
     }
     std::cout << "Encoding phase (load + inference): "
               << phase1_duration.count() << " ms" << std::endl;
