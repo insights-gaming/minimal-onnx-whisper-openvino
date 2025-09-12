@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <complex>
 #include <fftw3.h>
 #include <filesystem>
@@ -357,10 +358,11 @@ public:
     std::cout << "Encoder loaded successfully" << std::endl;
   }
 
-  std::pair<std::vector<float>, std::vector<float>>
-  encode(const std::vector<std::vector<float>> &padded_features) {
-
-    std::cout << "Running encoder..." << std::endl;
+  std::pair<std::vector<float>, std::vector<float>> encode(
+      const std::vector<std::vector<float>> &padded_features) {
+    
+    std::cout << "Running encoder inference..." << std::endl;
+    auto inference_start = std::chrono::high_resolution_clock::now();
 
     // Prepare input - transpose to (batch, mel_bins, time)
     std::vector<float> encoder_input_data(1 * 80 * 3000);
@@ -404,8 +406,10 @@ public:
     std::vector<float> encoder_v_copy(encoder_v_data,
                                       encoder_v_data + encoder_v_size);
 
-    std::cout << "Encoder completed successfully" << std::endl;
-
+    auto inference_end = std::chrono::high_resolution_clock::now();
+    auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(inference_end - inference_start);
+    std::cout << "Encoder inference completed in " << inference_duration.count() << " ms" << std::endl;
+    
     return {std::move(encoder_k_copy), std::move(encoder_v_copy)};
   }
 
@@ -431,12 +435,12 @@ public:
     std::cout << "Decoder loaded successfully" << std::endl;
   }
 
-  std::vector<int32_t>
-  decode(const std::vector<float> &encoder_k_copy,
-         const std::vector<float> &encoder_v_copy,
-         const std::unordered_map<int32_t, std::string> &tokens) {
-
-    std::cout << "Running decoder..." << std::endl;
+  std::vector<int32_t> decode(const std::vector<float> &encoder_k_copy,
+                              const std::vector<float> &encoder_v_copy,
+                              const std::unordered_map<int32_t, std::string> &tokens) {
+    
+    std::cout << "Running decoder inference..." << std::endl;
+    auto inference_start = std::chrono::high_resolution_clock::now();
 
     // Special token IDs
     const int32_t EOT_TOKEN = 50257;
@@ -619,7 +623,9 @@ public:
       offset_data[0]++;
     }
 
-    std::cout << "Decoder completed successfully" << std::endl;
+    auto inference_end = std::chrono::high_resolution_clock::now();
+    auto inference_duration = std::chrono::duration_cast<std::chrono::milliseconds>(inference_end - inference_start);
+    std::cout << "Decoder inference completed in " << inference_duration.count() << " ms" << std::endl;
     return predicted_tokens;
   }
 };
@@ -811,17 +817,24 @@ int main(int argc, char *argv[]) {
 
     // Phase 1: Encoding
     std::cout << "\n=== ENCODING PHASE ===" << std::endl;
+    auto phase1_start = std::chrono::high_resolution_clock::now();
     WhisperEncoder encoder(env, encoder_model_path, session_options);
     auto [encoder_k_copy, encoder_v_copy] = encoder.encode(padded_features);
-
+    
     // Release encoder resources
     encoder.release();
+    auto phase1_end = std::chrono::high_resolution_clock::now();
+    auto phase1_duration = std::chrono::duration_cast<std::chrono::milliseconds>(phase1_end - phase1_start);
+    std::cout << "Encoding phase completed in " << phase1_duration.count() << " ms" << std::endl;
 
-    // Phase 2: Decoding
+    // Phase 2: Decoding  
     std::cout << "\n=== DECODING PHASE ===" << std::endl;
+    auto phase2_start = std::chrono::high_resolution_clock::now();
     WhisperDecoder decoder(env, decoder_model_path, session_options);
-    auto predicted_tokens =
-        decoder.decode(encoder_k_copy, encoder_v_copy, tokens);
+    auto predicted_tokens = decoder.decode(encoder_k_copy, encoder_v_copy, tokens);
+    auto phase2_end = std::chrono::high_resolution_clock::now();
+    auto phase2_duration = std::chrono::duration_cast<std::chrono::milliseconds>(phase2_end - phase2_start);
+    std::cout << "Decoding phase completed in " << phase2_duration.count() << " ms" << std::endl;
 
     // Convert tokens to text
     std::cout << "Converting " << predicted_tokens.size()
@@ -833,6 +846,12 @@ int main(int argc, char *argv[]) {
         result_text += tokens[token_id];
       }
     }
+
+    auto total_duration = phase1_duration + phase2_duration;
+    std::cout << "\n=== Performance Summary ===" << std::endl;
+    std::cout << "Encoding phase (load + inference): " << phase1_duration.count() << " ms" << std::endl;
+    std::cout << "Decoding phase (load + inference): " << phase2_duration.count() << " ms" << std::endl;
+    std::cout << "Total processing time: " << total_duration.count() << " ms" << std::endl;
 
     std::cout << "\n=== Transcription Result ===" << std::endl;
     std::cout << result_text << std::endl;
