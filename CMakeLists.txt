@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.15...3.31)
 project(minimal_whisper)
 
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/onnxruntime/onnxruntime.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/libsndfile/libsndfile.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/fftw/fftw.cmake)
@@ -40,6 +43,8 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     "fftw3.lib"
     "fftw3l.lib"
 )
+
+target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_20)
 
 
 set(OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}")

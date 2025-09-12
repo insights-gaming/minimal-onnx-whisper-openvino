@@ -2,6 +2,7 @@
 #include <cmath>
 #include <complex>
 #include <fftw3.h>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <memory>
@@ -346,6 +347,9 @@ int main(int argc, char *argv[]) {
     std::string audio_file = "testaudio.wav";
     bool use_openvino = false;
     bool show_help = false;
+    std::filesystem::path model_path = "models\\whisper-small";
+    std::wstring model_prefix = L"small-";
+    std::wstring model_suffix = L".int8";
 
     std::string openvino_backends[3] = {"NPU", "GPU", "CPU"};
     size_t openvino_backend_count = 3;
@@ -372,6 +376,15 @@ int main(int argc, char *argv[]) {
           openvino_backends[openvino_backend_count++] = backend;
         }
 
+      } else if (arg.find("--model-dir=") == 0) {
+        auto s = arg.substr(12);
+        model_path = std::wstring(s.begin(), s.end());
+      } else if (arg.find("--model-prefix=") == 0) {
+        auto s = arg.substr(15);
+        model_prefix = std::wstring(s.begin(), s.end());
+      } else if (arg.find("--model-suffix=") == 0) {
+        auto s = arg.substr(15);
+        model_suffix = std::wstring(s.begin(), s.end());
       } else if (arg == "--help" || arg == "-h") {
         show_help = true;
         break;
@@ -505,12 +518,31 @@ int main(int argc, char *argv[]) {
     std::unique_ptr<Ort::Session> decoder_session;
     bool using_openvino = false;
 
+    auto encoder_model_path = (model_path / model_prefix)
+                                  .concat(L"encoder")
+                                  .concat(model_suffix)
+                                  .concat(L".onnx")
+                                  .wstring();
+    auto decoder_model_path = (model_path / model_prefix)
+                                  .concat(L"decoder")
+                                  .concat(model_suffix)
+                                  .concat(L".onnx")
+                                  .wstring();
+
+    std::cout << "Encoder model path: "
+              << std::string(encoder_model_path.begin(),
+                             encoder_model_path.end())
+              << std::endl;
+    std::cout << "Decoder model path: "
+              << std::string(decoder_model_path.begin(),
+                             decoder_model_path.end())
+              << std::endl;
+
     // Try OpenVINO first if requested
     if (use_openvino && openvino_available) {
       try {
         encoder_session = std::make_unique<Ort::Session>(
-            env, L"models/whisper-small/small-encoder.int8.onnx",
-            openvino_session_options);
+            env, encoder_model_path.c_str(), openvino_session_options);
         std::cout << "Encoder loaded with OpenVINO" << std::endl;
         using_openvino = true;
       } catch (const std::exception &e) {
@@ -524,8 +556,7 @@ int main(int argc, char *argv[]) {
     // Use CPU if OpenVINO failed or not requested
     if (!using_openvino) {
       encoder_session = std::make_unique<Ort::Session>(
-          env, L"models/whisper-small/small-encoder.int8.onnx",
-          session_options);
+          env, encoder_model_path.c_str(), session_options);
       std::cout << "Encoder loaded with CPU" << std::endl;
     }
 
@@ -535,23 +566,20 @@ int main(int argc, char *argv[]) {
     if (using_openvino) {
       try {
         decoder_session = std::make_unique<Ort::Session>(
-            env, L"models/whisper-small/small-decoder.int8.onnx",
-            openvino_session_options);
+            env, decoder_model_path.c_str(), openvino_session_options);
         std::cout << "Decoder loaded with OpenVINO" << std::endl;
       } catch (const std::exception &e) {
         std::cout << "OpenVINO decoder loading failed: " << e.what()
                   << std::endl;
         std::cout << "Falling back to CPU..." << std::endl;
         decoder_session = std::make_unique<Ort::Session>(
-            env, L"models/whisper-small/small-decoder.int8.onnx",
-            session_options);
+            env, decoder_model_path.c_str(), session_options);
         std::cout << "Decoder loaded with CPU" << std::endl;
         using_openvino = false;
       }
     } else {
       decoder_session = std::make_unique<Ort::Session>(
-          env, L"models/whisper-small/small-decoder.int8.onnx",
-          session_options);
+          env, decoder_model_path.c_str(), session_options);
       std::cout << "Decoder loaded with CPU" << std::endl;
     }
 
@@ -597,8 +625,7 @@ int main(int argc, char *argv[]) {
 
         // Reload encoder with CPU
         encoder_session = std::make_unique<Ort::Session>(
-            env, L"models/whisper-small/small-encoder.int8.onnx",
-            session_options);
+            env, encoder_model_path.c_str(), session_options);
         encoder_outputs = encoder_session->Run(
             Ort::RunOptions{nullptr}, encoder_input_names.data(),
             &encoder_input, 1, encoder_output_names.data(),
@@ -608,8 +635,7 @@ int main(int argc, char *argv[]) {
         // Also reload decoder with CPU
         std::cout << "Reloading decoder with CPU..." << std::endl;
         decoder_session = std::make_unique<Ort::Session>(
-            env, L"models/whisper-small/small-decoder.int8.onnx",
-            session_options);
+            env, decoder_model_path.c_str(), session_options);
       } else {
         throw;
       }
@@ -687,16 +713,25 @@ int main(int argc, char *argv[]) {
 
     std::cout << "Model vocab size: " << vocab_size << std::endl;
 
-    // Use proper whisper special tokens
-    const int32_t SOT_TOKEN = vocab_size - 6;           // Start of transcript
-    const int32_t EOT_TOKEN = vocab_size - 7;           // End of transcript
-    const int32_t NO_TIMESTAMPS_TOKEN = vocab_size - 1; // No timestamps
+    // Special token IDs extracted from tokenizer
+    const int32_t EOT_TOKEN = 50257;           // <|endoftext|>
+    const int32_t SOT_TOKEN = 50258;           // <|startoftranscript|>
+    const int32_t ENGLISH_TOKEN = 50259;       // <|en|>
+    const int32_t NO_TIMESTAMPS_TOKEN = 50363; // <|notimestamps|>
+    const int32_t TRANSCRIBE_TOKEN = 50359;    // <|transcribe|>
+    const int32_t TRANSLATE_TOKEN = 50358;     // <|translate|>
+    const int32_t VOCAB_SIZE = 51865;
 
     std::cout << "Special tokens: SOT=" << SOT_TOKEN << ", EOT=" << EOT_TOKEN
-              << ", NO_TIMESTAMPS=" << NO_TIMESTAMPS_TOKEN << std::endl;
+              << ", NO_TIMESTAMPS=" << NO_TIMESTAMPS_TOKEN
+              << ", ENGLISH=" << ENGLISH_TOKEN
+              << ", TRANSCRIBE=" << TRANSCRIBE_TOKEN << std::endl;
+    std::cout << "Actual vocab size: " << vocab_size
+              << ", Expected vocab size: " << VOCAB_SIZE << std::endl;
 
     // Start decoding with proper initial sequence
-    std::vector<int64_t> initial_tokens = {SOT_TOKEN, NO_TIMESTAMPS_TOKEN};
+    std::vector<int64_t> initial_tokens = {
+        SOT_TOKEN, ENGLISH_TOKEN, TRANSCRIBE_TOKEN, NO_TIMESTAMPS_TOKEN};
     std::vector<int32_t> predicted_tokens;
 
     // Initialize KV caches
@@ -761,7 +796,9 @@ int main(int argc, char *argv[]) {
       }
 
       // Skip special tokens in output but still process them
-      if (tokens.find(next_token) != tokens.end() || next_token < 50000) {
+      // Only add non-special tokens to output (regular vocabulary tokens are <
+      // 50257)
+      if (tokens.find(next_token) != tokens.end() && next_token < 50257) {
         predicted_tokens.push_back(next_token);
       }
 
