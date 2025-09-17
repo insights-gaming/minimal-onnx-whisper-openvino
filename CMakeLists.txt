@@ -24,17 +24,20 @@ add_executable(${PROJECT_NAME}
 
 add_dependencies(${PROJECT_NAME} onnxruntime)
 add_dependencies(${PROJECT_NAME} libsndfile)
-add_dependencies(${PROJECT_NAME} fftw)
+add_dependencies(${PROJECT_NAME} fftw3)
+add_dependencies(${PROJECT_NAME} fftw3l)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${onnxruntime_INCLUDE_DIR}/onnxruntime
     ${libsndfile_INCLUDE_DIR}
-    ${fftw_INCLUDE_DIR}
+    ${fftw3_INCLUDE_DIR}
+    ${fftw3l_INCLUDE_DIR}
 )
 target_link_directories(${PROJECT_NAME} PRIVATE
     ${onnxruntime_LIBRARY_DIR}
     ${libsndfile_LIBRARY_DIR}
-    ${fftw_LIBRARY_DIR}
+    ${fftw3_LIBRARY_DIR}
+    ${fftw3l_LIBRARY_DIR}
 )
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
@@ -57,7 +60,7 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${openvino_BINARY_DIR}/openvino.dll"
         "${openvino_INSTALL_DIR}/3rdparty/tbb/bin/tbb12.dll"
         "${libsndfile_BINARY_DIR}/sndfile.dll"
-        "${fftw_BINARY_DIR}/fftw3.dll"
-        "${fftw_BINARY_DIR}/fftw3l.dll"
+        "${fftw3_BINARY_DIR}/fftw3.dll"
+        "${fftw3l_BINARY_DIR}/fftw3l.dll"
         "${OUTPUT_DIR}"
 )
