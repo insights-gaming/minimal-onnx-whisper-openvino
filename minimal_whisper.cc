@@ -470,6 +470,13 @@ public:
   }
 };
 
+typedef struct {
+  std::vector<int64_t> k_shape;
+  std::vector<float> k_data;
+  std::vector<int64_t> v_shape;
+  std::vector<float> v_data;
+} WhisperEncoderOutput;
+
 class WhisperEncoder {
 private:
   std::unique_ptr<Ort::Session> session_;
@@ -490,9 +497,8 @@ public:
               << " ms" << std::endl;
   }
 
-  std::pair<std::vector<float>, std::vector<float>>
+  WhisperEncoderOutput
   encode(const std::vector<std::vector<float>> &padded_features) {
-
     std::cout << "Running encoder inference..." << std::endl;
     auto inference_start = std::chrono::high_resolution_clock::now();
 
@@ -505,6 +511,12 @@ public:
     }
 
     std::vector<int64_t> encoder_input_shape = {1, 80, 3000};
+
+    std::cout << "Encoder Input Shape: ";
+    for (auto dim : encoder_input_shape)
+      std::cout << dim << " ";
+    std::cout << std::endl;
+
     Ort::Value encoder_input = Ort::Value::CreateTensor<float>(
         memory_info_, encoder_input_data.data(), encoder_input_data.size(),
         encoder_input_shape.data(), encoder_input_shape.size());
@@ -533,11 +545,6 @@ public:
     for (auto dim : encoder_v_shape)
       encoder_v_size *= dim;
 
-    std::vector<float> encoder_k_copy(encoder_k_data,
-                                      encoder_k_data + encoder_k_size);
-    std::vector<float> encoder_v_copy(encoder_v_data,
-                                      encoder_v_data + encoder_v_size);
-
     auto inference_end = std::chrono::high_resolution_clock::now();
     auto inference_duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(inference_end -
@@ -545,7 +552,22 @@ public:
     std::cout << "Encoder inference completed in " << inference_duration.count()
               << " ms" << std::endl;
 
-    return {std::move(encoder_k_copy), std::move(encoder_v_copy)};
+    std::cout << "Encoder K Shape: ";
+    for (auto dim : encoder_k_shape)
+      std::cout << dim << " ";
+    std::cout << std::endl;
+
+    std::cout << "Encoder V Shape: ";
+    for (auto dim : encoder_v_shape)
+      std::cout << dim << " ";
+    std::cout << std::endl;
+
+    return {
+        std::vector<int64_t>(encoder_k_shape.begin(), encoder_k_shape.end()),
+        std::vector<float>(encoder_k_data, encoder_k_data + encoder_k_size),
+        std::vector<int64_t>(encoder_v_shape.begin(), encoder_v_shape.end()),
+        std::vector<float>(encoder_v_data, encoder_v_data + encoder_v_size),
+    };
   }
 
   void release() {
@@ -575,8 +597,7 @@ public:
   }
 
   std::vector<int32_t>
-  decode(const std::vector<float> &encoder_k_copy,
-         const std::vector<float> &encoder_v_copy,
+  decode(const WhisperEncoderOutput &encoder_output,
          const std::unordered_map<int32_t, std::string> &tokens) {
 
     std::cout << "Running decoder inference..." << std::endl;
@@ -591,9 +612,12 @@ public:
 
     // KV cache configuration for whisper-small
     std::vector<int64_t> kv_cache_shape = {12, 1, 448, 768};
-    int64_t kv_cache_size = 12 * 1 * 448 * 768;
-    std::vector<int64_t> encoder_k_shape = {12, 1, 1500, 768};
-    std::vector<int64_t> encoder_v_shape = {12, 1, 1500, 768};
+    int64_t kv_cache_size = 1;
+    for (auto dim : kv_cache_shape)
+      kv_cache_size *= dim;
+
+    // std::vector<int64_t> encoder_k_shape = {12, 1, 1500, 768};
+    // std::vector<int64_t> encoder_v_shape = {12, 1, 1500, 768};
 
     std::vector<const char *> decoder_input_names = {
         "tokens",          "in_n_layer_self_k_cache", "in_n_layer_self_v_cache",
@@ -602,54 +626,51 @@ public:
         "logits", "out_n_layer_self_k_cache", "out_n_layer_self_v_cache"};
 
     // Determine vocab size with test run
-    std::vector<int64_t> test_tokens = {50257};
-    std::vector<int64_t> test_token_shape = {1, 1};
-    std::vector<float> test_self_k(kv_cache_size, 0.0f);
-    std::vector<float> test_self_v(kv_cache_size, 0.0f);
-    std::vector<int64_t> test_offset = {0};
+    // std::vector<int64_t> test_tokens = {50257};
+    // std::vector<int64_t> test_token_shape = {1, 1};
+    // std::vector<float> test_self_k(kv_cache_size, 0.0f);
+    // std::vector<float> test_self_v(kv_cache_size, 0.0f);
+    // std::vector<int64_t> test_offset = {0};
     std::vector<int64_t> offset_shape = {1};
 
     int64_t encoder_k_size = 1;
-    for (auto dim : encoder_k_shape)
+    for (auto dim : encoder_output.k_shape)
       encoder_k_size *= dim;
     int64_t encoder_v_size = 1;
-    for (auto dim : encoder_v_shape)
+    for (auto dim : encoder_output.v_shape)
       encoder_v_size *= dim;
 
-    std::vector<Ort::Value> test_inputs;
-    test_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
-        memory_info_, test_tokens.data(), 1, test_token_shape.data(),
-        test_token_shape.size()));
-    test_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, test_self_k.data(), kv_cache_size, kv_cache_shape.data(),
-        kv_cache_shape.size()));
-    test_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, test_self_v.data(), kv_cache_size, kv_cache_shape.data(),
-        kv_cache_shape.size()));
-    test_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, const_cast<float *>(encoder_k_copy.data()),
-        encoder_k_size, encoder_k_shape.data(), encoder_k_shape.size()));
-    test_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, const_cast<float *>(encoder_v_copy.data()),
-        encoder_v_size, encoder_v_shape.data(), encoder_v_shape.size()));
-    test_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
-        memory_info_, test_offset.data(), 1, offset_shape.data(),
-        offset_shape.size()));
+    // std::vector<Ort::Value> test_inputs;
+    // test_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+    //     memory_info_, test_tokens.data(), 1, test_token_shape.data(),
+    //     test_token_shape.size()));
+    // test_inputs.push_back(Ort::Value::CreateTensor<float>(
+    //     memory_info_, test_self_k.data(), kv_cache_size,
+    //     kv_cache_shape.data(), kv_cache_shape.size()));
+    // test_inputs.push_back(Ort::Value::CreateTensor<float>(
+    //     memory_info_, test_self_v.data(), kv_cache_size,
+    //     kv_cache_shape.data(), kv_cache_shape.size()));
+    // test_inputs.push_back(Ort::Value::CreateTensor<float>(
+    //     memory_info_, const_cast<float *>(encoder_k_copy.data()),
+    //     encoder_k_size, encoder_k_shape.data(), encoder_k_shape.size()));
+    // test_inputs.push_back(Ort::Value::CreateTensor<float>(
+    //     memory_info_, const_cast<float *>(encoder_v_copy.data()),
+    //     encoder_v_size, encoder_v_shape.data(), encoder_v_shape.size()));
+    // test_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+    //     memory_info_, test_offset.data(), 1, offset_shape.data(),
+    //     offset_shape.size()));
 
-    auto test_outputs =
-        session_->Run(Ort::RunOptions{nullptr}, decoder_input_names.data(),
-                      test_inputs.data(), test_inputs.size(),
-                      decoder_output_names.data(), decoder_output_names.size());
+    // auto test_outputs =
+    //     session_->Run(Ort::RunOptions{nullptr}, decoder_input_names.data(),
+    //                   test_inputs.data(), test_inputs.size(),
+    //                   decoder_output_names.data(),
+    //                   decoder_output_names.size());
 
-    auto test_logits_shape =
-        test_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
-    int64_t vocab_size = test_logits_shape[2];
+    // auto test_logits_shape =
+    //     test_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    // int64_t vocab_size = test_logits_shape[2];
+    int64_t vocab_size = 51865;
     std::cout << "Model vocab size: " << vocab_size << std::endl;
-
-    // Start decoding with proper initial sequence
-    std::vector<int64_t> initial_tokens = {
-        SOT_TOKEN, ENGLISH_TOKEN, TRANSCRIBE_TOKEN, NO_TIMESTAMPS_TOKEN};
-    std::vector<int32_t> predicted_tokens;
 
     // Initialize KV caches
     std::vector<float> self_k_cache_data(kv_cache_size, 0.0f);
@@ -657,55 +678,73 @@ public:
     std::vector<int64_t> offset_data = {0};
 
     // Initial decoder run
-    std::vector<int64_t> tokens_shape = {
-        1, static_cast<int64_t>(initial_tokens.size())};
+    std::vector<int64_t> single_token_shape = {1, 1};
 
-    std::vector<Ort::Value> decoder_inputs;
-    decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
-        memory_info_, initial_tokens.data(), initial_tokens.size(),
-        tokens_shape.data(), tokens_shape.size()));
-    decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, self_k_cache_data.data(), kv_cache_size,
-        kv_cache_shape.data(), kv_cache_shape.size()));
-    decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, self_v_cache_data.data(), kv_cache_size,
-        kv_cache_shape.data(), kv_cache_shape.size()));
-    decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, const_cast<float *>(encoder_k_copy.data()),
-        encoder_k_size, encoder_k_shape.data(), encoder_k_shape.size()));
-    decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-        memory_info_, const_cast<float *>(encoder_v_copy.data()),
-        encoder_v_size, encoder_v_shape.data(), encoder_v_shape.size()));
-    decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
-        memory_info_, offset_data.data(), 1, offset_shape.data(),
-        offset_shape.size()));
+    const float *logits_data;
+    const float *updated_self_k;
+    const float *updated_self_v;
 
-    auto decoder_outputs =
-        session_->Run(Ort::RunOptions{nullptr}, decoder_input_names.data(),
-                      decoder_inputs.data(), decoder_inputs.size(),
-                      decoder_output_names.data(), decoder_output_names.size());
+    std::vector<Ort::Value> decoder_outputs;
+    int32_t next_token;
 
-    // Get first prediction
-    const float *logits_data = decoder_outputs[0].GetTensorData<float>();
-    auto logits_shape =
-        decoder_outputs[0].GetTensorTypeAndShapeInfo().GetShape();
+    // Start decoding with proper initial sequence
+    std::vector<int64_t> initial_tokens = {
+        SOT_TOKEN,
+        ENGLISH_TOKEN,
+        TRANSCRIBE_TOKEN,
+        NO_TIMESTAMPS_TOKEN,
+    };
 
-    const float *last_logits = logits_data + (logits_shape[1] - 1) * vocab_size;
-    int32_t next_token = static_cast<int32_t>(std::distance(
-        last_logits, std::max_element(last_logits, last_logits + vocab_size)));
+    for (int i = 0; i < initial_tokens.size(); i++) {
+      std::vector<Ort::Value> decoder_inputs;
+      decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+          memory_info_, &initial_tokens.data()[i], 1, single_token_shape.data(),
+          single_token_shape.size()));
+      decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
+          memory_info_, self_k_cache_data.data(), kv_cache_size,
+          kv_cache_shape.data(), kv_cache_shape.size()));
+      decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
+          memory_info_, self_v_cache_data.data(), kv_cache_size,
+          kv_cache_shape.data(), kv_cache_shape.size()));
+      decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
+          memory_info_, const_cast<float *>(encoder_output.k_data.data()),
+          encoder_k_size, encoder_output.k_shape.data(),
+          encoder_output.k_shape.size()));
+      decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
+          memory_info_, const_cast<float *>(encoder_output.v_data.data()),
+          encoder_v_size, encoder_output.v_shape.data(),
+          encoder_output.v_shape.size()));
+      decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
+          memory_info_, offset_data.data(), 1, offset_shape.data(),
+          offset_shape.size()));
 
-    // Copy updated KV caches
-    const float *updated_self_k = decoder_outputs[1].GetTensorData<float>();
-    const float *updated_self_v = decoder_outputs[2].GetTensorData<float>();
-    std::copy(updated_self_k, updated_self_k + kv_cache_size,
-              self_k_cache_data.begin());
-    std::copy(updated_self_v, updated_self_v + kv_cache_size,
-              self_v_cache_data.begin());
+      decoder_outputs = session_->Run(
+          Ort::RunOptions{nullptr}, decoder_input_names.data(),
+          decoder_inputs.data(), decoder_inputs.size(),
+          decoder_output_names.data(), decoder_output_names.size());
 
-    offset_data[0] = initial_tokens.size();
+      // Get first prediction
+      logits_data = decoder_outputs[0].GetTensorData<float>();
+      next_token = static_cast<int32_t>(std::distance(
+          logits_data,
+          std::max_element(logits_data, logits_data + vocab_size)));
+
+      // Copy updated KV caches
+      updated_self_k = decoder_outputs[1].GetTensorData<float>();
+      updated_self_v = decoder_outputs[2].GetTensorData<float>();
+      std::copy(updated_self_k, updated_self_k + kv_cache_size,
+                self_k_cache_data.begin());
+      std::copy(updated_self_v, updated_self_v + kv_cache_size,
+                self_v_cache_data.begin());
+
+      offset_data[0] += 1;
+    }
+
+    std::vector<int32_t> predicted_tokens;
 
     // Iterative decoding
     int max_tokens = 224;
+
     for (int step = 0; step < max_tokens; step++) {
       if (next_token == EOT_TOKEN) {
         std::cout << "EOT token detected, ending generation" << std::endl;
@@ -719,7 +758,6 @@ public:
 
       // Prepare single token input
       std::vector<int64_t> single_token = {next_token};
-      std::vector<int64_t> single_token_shape = {1, 1};
 
       std::vector<Ort::Value> next_decoder_inputs;
       next_decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
@@ -732,11 +770,13 @@ public:
           memory_info_, self_v_cache_data.data(), kv_cache_size,
           kv_cache_shape.data(), kv_cache_shape.size()));
       next_decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-          memory_info_, const_cast<float *>(encoder_k_copy.data()),
-          encoder_k_size, encoder_k_shape.data(), encoder_k_shape.size()));
+          memory_info_, const_cast<float *>(encoder_output.k_data.data()),
+          encoder_k_size, encoder_output.k_shape.data(),
+          encoder_output.k_shape.size()));
       next_decoder_inputs.push_back(Ort::Value::CreateTensor<float>(
-          memory_info_, const_cast<float *>(encoder_v_copy.data()),
-          encoder_v_size, encoder_v_shape.data(), encoder_v_shape.size()));
+          memory_info_, const_cast<float *>(encoder_output.v_data.data()),
+          encoder_v_size, encoder_output.v_shape.data(),
+          encoder_output.v_shape.size()));
       next_decoder_inputs.push_back(Ort::Value::CreateTensor<int64_t>(
           memory_info_, offset_data.data(), 1, offset_shape.data(),
           offset_shape.size()));
@@ -932,7 +972,12 @@ int main(int argc, char *argv[]) {
           no_cache ? nullptr : model_cache.get_cache_dir().c_str();
       openvino_options.context = nullptr;
       openvino_options.enable_opencl_throttling = false;
-      openvino_options.enable_dynamic_shapes = true;
+
+      openvino_options.enable_dynamic_shapes = false;
+      // Automatically enable QDQ optimizer for INT8 models
+      // if (model_suffix.find(L".int8") != std::wstring::npos) {
+      //   openvino_options.enable_qdq_optimizer = true;
+      // }
 
       bool openvino_configured = false;
       for (size_t i = 0; i < openvino_backend_count; i++) {
@@ -996,7 +1041,7 @@ int main(int argc, char *argv[]) {
     std::cout << "\n=== ENCODING PHASE ===" << std::endl;
     auto phase1_start = std::chrono::high_resolution_clock::now();
     WhisperEncoder encoder(env, encoder_model_path, session_options);
-    auto [encoder_k_copy, encoder_v_copy] = encoder.encode(padded_features);
+    auto encoder_output = encoder.encode(padded_features);
 
     // Release encoder resources
     encoder.release();
@@ -1011,8 +1056,7 @@ int main(int argc, char *argv[]) {
     std::cout << "\n=== DECODING PHASE ===" << std::endl;
     auto phase2_start = std::chrono::high_resolution_clock::now();
     WhisperDecoder decoder(env, decoder_model_path, session_options);
-    auto predicted_tokens =
-        decoder.decode(encoder_k_copy, encoder_v_copy, tokens);
+    auto predicted_tokens = decoder.decode(encoder_output, tokens);
     auto phase2_end = std::chrono::high_resolution_clock::now();
     auto phase2_duration =
         std::chrono::duration_cast<std::chrono::milliseconds>(phase2_end -
