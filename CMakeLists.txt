@@ -22,10 +22,17 @@ add_executable(${PROJECT_NAME}
     minimal_whisper.cc
 )
 
+add_executable(minimal_voice_analysis
+    minimal_voice_analysis.cc
+)
+
 add_dependencies(${PROJECT_NAME} onnxruntime)
 add_dependencies(${PROJECT_NAME} libsndfile)
 add_dependencies(${PROJECT_NAME} fftw3)
 add_dependencies(${PROJECT_NAME} fftw3l)
+
+add_dependencies(minimal_voice_analysis onnxruntime)
+add_dependencies(minimal_voice_analysis libsndfile)
 
 target_include_directories(${PROJECT_NAME} PRIVATE
     ${onnxruntime_INCLUDE_DIR}/onnxruntime
@@ -49,6 +56,22 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_20)
 
+target_include_directories(minimal_voice_analysis PRIVATE
+    ${onnxruntime_INCLUDE_DIR}/onnxruntime
+    ${libsndfile_INCLUDE_DIR}
+)
+target_link_directories(minimal_voice_analysis PRIVATE
+    ${onnxruntime_LIBRARY_DIR}
+    ${libsndfile_LIBRARY_DIR}
+)
+
+target_link_libraries(minimal_voice_analysis PRIVATE
+    "onnxruntime.lib"
+    "sndfile.lib"
+)
+
+target_compile_features(minimal_voice_analysis PRIVATE cxx_std_20)
+
 
 set(OUTPUT_DIR "${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}")
 
@@ -62,5 +85,16 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
         "${libsndfile_BINARY_DIR}/sndfile.dll"
         "${fftw3_BINARY_DIR}/fftw3.dll"
         "${fftw3l_BINARY_DIR}/fftw3l.dll"
+        "${OUTPUT_DIR}"
+)
+
+add_custom_command(TARGET minimal_voice_analysis POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${onnxruntime_BINARY_DIR}/onnxruntime.dll"
+        "${onnxruntime_BINARY_DIR}/onnxruntime_providers_shared.dll"
+        "${onnxruntime_LIBRARY_DIR}/onnxruntime_providers_openvino.dll"
+        "${openvino_BINARY_DIR}/openvino.dll"
+        "${openvino_INSTALL_DIR}/3rdparty/tbb/bin/tbb12.dll"
+        "${libsndfile_BINARY_DIR}/sndfile.dll"
         "${OUTPUT_DIR}"
 )

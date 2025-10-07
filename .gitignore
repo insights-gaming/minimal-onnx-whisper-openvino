@@ -1,3 +1,4 @@
 /build
 /.zed
 /openvino_cache
+/models/vad/*.onnx
