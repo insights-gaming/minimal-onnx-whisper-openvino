@@ -1,0 +1,5 @@
+sampling_rate=16000
+num_labels=3
+label_0=Valence
+label_1=Arousal
+label_2=Dominance

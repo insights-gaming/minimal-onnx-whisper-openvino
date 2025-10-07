@@ -1,3 +1,6 @@
 /build
 /.zed
 /openvino_cache
+/models/vad/*.onnx
+__pycache__/
+*.pyc
